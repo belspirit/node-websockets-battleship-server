@@ -21,9 +21,10 @@
     "url": "https://github.com/belspirit/node-websockets-battleship-server/issues"
   },
   "homepage": "https://github.com/belspirit/node-websockets-battleship-server#readme",
-    "devDependencies": {
+  "devDependencies": {
     "@types/jest": "^29.5.2",
     "@types/supertest": "^2.0.12",
+    "@types/ws": "^8.5.5",
     "cross-env": "^7.0.3",
     "dotenv": "^16.3.1",
     "jest": "^29.5.0",
@@ -37,5 +38,8 @@
     "webpack": "^5.88.1",
     "webpack-cli": "^5.1.4",
     "webpack-node-externals": "^3.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.13.0"
   }
 }
