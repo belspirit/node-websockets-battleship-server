@@ -2,11 +2,12 @@ import { WebSocketServer } from "ws";
 import { inspect } from "util";
 
 import {
+  IAttackResponse,
   IBoard,
   IGame,
   IRegisterUserResponse,
   IRoom,
-  IShipPosition,
+  IShip,
   IUser,
   IWin,
   MessageType,
@@ -75,7 +76,7 @@ wss.on("connection", (ws: WS) => {
         const { gameId, ships } = message.data as {
           gameId: number;
           indexPlayer: number;
-          ships: IShipPosition[];
+          ships: IShip[];
         };
         const game = addShips(gameId, ws.user.userId!, ships);
 
@@ -97,11 +98,58 @@ wss.on("connection", (ws: WS) => {
             currentPlayerIndex: playerId,
           });
 
-          if (playerId !== game.gameUserIds[0]) {
+          game.turnId = game.gameUserIds[0];
+          if (playerId !== game.turnId) {
             return;
           }
           sendMessage(player, MessageType.turn, {
-            currentPlayer: game.gameUserIds[0],
+            currentPlayer: playerId,
+          });
+        });
+      }
+
+      if (message.type === MessageType.attack) {
+        const currentPlayerId = ws.user.userId;
+        const currentPlayerName = ws.user.name;
+        const { gameId, x, y, indexPlayer } = message.data as {
+          gameId: number;
+          x: number;
+          y: number;
+          indexPlayer: number;
+        };
+        const { game, finish, enemyId, attacks } = playersAttack(
+          gameId,
+          currentPlayerId,
+          x,
+          y
+        );
+
+        wss.clients.forEach((client) => {
+          const ws = client as WS;
+          if (
+            ws.user.userId !== enemyId &&
+            ws.user.userId !== currentPlayerId
+          ) {
+            return;
+          }
+          attacks.forEach((a) => {
+            const attack: IAttackResponse = {
+              ...a,
+              currentPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
+            };
+            sendMessage(ws, MessageType.attack, attack);
+          });
+          if (finish) {
+            win(currentPlayerName);
+            sendMessage(ws, MessageType.finish, {
+              winPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
+            });
+            return;
+          }
+          console.log({ turnId: game.turnId });
+
+          sendMessage(ws, MessageType.turn, {
+            currentPlayer: ws.user.userId === game.turnId ? 0 : 1,
           });
         });
       }
@@ -134,8 +182,14 @@ const interval = setInterval(function ping() {
   wss.clients.forEach(function each(client) {
     const ws: WS = client as WS;
     if (ws.isAlive === false) {
-      return ws.terminate();
-      console.log("Terminate WS");
+      clearSession;
+      ws.terminate();
+      const userId = ws.user?.userId;
+      if (userId === undefined) {
+        return;
+      }
+      clearSession(userId);
+      return;
     }
 
     ws.isAlive = false;
@@ -178,7 +232,7 @@ const registerUser = (user: IUser) => {
   return { response, user: existingUser };
 };
 
-const createRoom = (userName: string, userId: number) => {
+const createRoom = (userName: string, userId: number): IRoom => {
   const existingRoom = rooms.find(
     (r) =>
       r.roomUsers.length === 1 && r.roomUsers.some((u) => u.userId === userId)
@@ -195,6 +249,7 @@ const createRoom = (userName: string, userId: number) => {
     roomUsers: [{ name: userName, userId }],
   };
   rooms.push(room);
+  return room;
 };
 
 const addUserToRoom = (roomId: number, indexUser: number) => {
@@ -209,10 +264,12 @@ const addUserToRoom = (roomId: number, indexUser: number) => {
     );
   }
   const user = users.find((u) => u.userId === indexUser);
-  if (user) {
-    room.roomUsers.push({ name: user.name, userId: user.userId });
+  if (!user) {
+    throw new Error(`User ${indexUser} is not found`);
   }
-  const [user1, user2] = room.roomUsers;
+  rooms = rooms.filter((r) => r.roomId !== room.roomId);
+  const [user1] = room.roomUsers;
+  const user2 = user;
   return createGame(user1.userId, user2.userId);
 };
 
@@ -229,6 +286,7 @@ const createGame = (userId1: number, userId2: number): IGame => {
   const game: IGame = {
     gameId: gameId,
     gameUserIds: [userId1, userId2],
+    turnId: userId1,
     boards: [],
   };
   gameId++;
@@ -236,11 +294,7 @@ const createGame = (userId1: number, userId2: number): IGame => {
   return game;
 };
 
-const addShips = (
-  gameId: number,
-  userId: number,
-  ships: IShipPosition[]
-): IGame => {
+const addShips = (gameId: number, userId: number, ships: IShip[]): IGame => {
   const game = games.find(
     (g) =>
       g.gameUserIds.length === 2 && g.gameUserIds.some((id) => id === userId)
@@ -252,6 +306,11 @@ const addShips = (
     throw new Error("Both players have provided their ships already");
   }
 
+  ships.map((s) => {
+    s.health = s.length;
+    s.killed = false;
+  });
+
   const board: IBoard = {
     gameId,
     userId,
@@ -261,4 +320,116 @@ const addShips = (
   game.boards.push(board);
 
   return game;
+};
+
+const playersAttack = (
+  gameId: number,
+  userId: number,
+  x: number,
+  y: number
+): {
+  game: IGame;
+  finish: boolean;
+  enemyId: number;
+  attacks: IAttackResponse[];
+} => {
+  const game = games.find((g) => g.gameId === gameId);
+  if (!game) {
+    throw new Error(`The game ${gameId} doesn't exist`);
+  }
+  const board = game.boards.find((b) => b.userId === userId);
+  if (!board) {
+    throw new Error(`The user ${userId} doesn't exist in the game ${gameId}`);
+  }
+  if (game.turnId !== userId) {
+    throw new Error(
+      `The user ${userId} should't attack when turn user ${game.turnId}`
+    );
+  }
+  const existingAttack = board.attacks.find(
+    (a) => a.position.x === x && a.position.y === y
+  );
+  if (existingAttack) {
+    throw new Error(`The user ${userId} already attacked by x:${x} y:${y}`);
+  }
+  const enemyBoard = game.boards.find((b) => b.userId !== userId);
+  if (!enemyBoard) {
+    throw new Error(`The enemy's board doesn't exist in the game ${gameId}`);
+  }
+  const result: IAttackResponse[] = [];
+
+  const ship = enemyBoard.ships.find((s) => {
+    const x1 = s.position.x;
+    const x2 = x1 + (!s.direction ? s.length - 1 : 0);
+    const y1 = s.position.y;
+    const y2 = y1 + (s.direction ? s.length - 1 : 0);
+    return x1 <= x && x <= x2 && y1 <= y && y <= y2;
+  });
+  const enemyId = enemyBoard.userId;
+  let turn = false;
+  let finish = false;
+  if (ship) {
+    turn = true;
+    ship.health--;
+    if (!ship.health) {
+      ship.killed = true;
+      for (let i = 0; i < ship.length; i++) {
+        const x = ship.direction ? ship.position.x : ship.position.x + i;
+        const y = !ship.direction ? ship.position.y : ship.position.y + i;
+        const attack: IAttackResponse = {
+          currentPlayer: enemyId,
+          status: "killed",
+          position: { x, y },
+        };
+        result.push(attack);
+      }
+      for (let xn = -1; xn < (ship.direction ? 1 : ship.length) + 1; xn++) {
+        for (let yn = -1; yn < (!ship.direction ? 1 : ship.length) + 1; yn++) {
+          const x = ship.position.x + xn;
+          const y = ship.position.y + yn;
+          if (x < 0 || x > 9 || y < 0 || y > 9) continue;
+
+          const attack: IAttackResponse = {
+            currentPlayer: enemyId,
+            status: "miss",
+            position: { x, y },
+          };
+          result.push(attack);
+        }
+      }
+    } else {
+      const attack: IAttackResponse = {
+        currentPlayer: enemyId,
+        status: "shot",
+        position: { x, y },
+      };
+      result.push(attack);
+    }
+    finish = enemyBoard.ships.every((ship) => ship.killed);
+    if (finish) {
+      games = games.filter((g) => g.gameId !== gameId);
+    }
+  } else {
+    const attack: IAttackResponse = {
+      currentPlayer: enemyId,
+      status: "miss",
+      position: { x, y },
+    };
+    result.push(attack);
+  }
+  board.attacks.push(...result);
+  const turnId = game.gameUserIds.find((id) =>
+    turn ? id === userId : id !== userId
+  )!;
+  game.turnId = turnId;
+
+  return { game, finish, enemyId, attacks: result };
+};
+
+const win = (name: string) => {
+  let winner = winners.find((w) => (w.name = name));
+  if (!winner) {
+    winner = { name, wins: 0 };
+  }
+  winner.wins++;
 };

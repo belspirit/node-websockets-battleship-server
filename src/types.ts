@@ -28,25 +28,34 @@ export interface IResponseMessage<T> {
   id: number;
 }
 
-export interface IShipPosition {
+export interface IShip {
   position: { x: number; y: number };
   direction: boolean;
   type: "huge" | "large" | "medium" | "small";
   length: 1 | 2 | 3 | 4;
+  health: 1 | 2 | 3 | 4;
   killed: boolean;
 }
 
 export interface IAttack {
   x: number;
   y: number;
-  state: "shot" | "miss";
+}
+
+export interface IAttackResponse {
+  position: {
+    x: number;
+    y: number;
+  };
+  currentPlayer: number;
+  status: "miss" | "killed" | "shot";
 }
 
 export interface IBoard {
   gameId: number;
   userId: number;
-  ships: IShipPosition[];
-  attacks: IAttack[];
+  ships: IShip[];
+  attacks: IAttackResponse[];
 }
 
 export interface IUser {
@@ -61,6 +70,7 @@ export interface IRoom {
 export interface IGame {
   gameId: number;
   gameUserIds: number[];
+  turnId: number;
   boards: IBoard[];
 }
 
