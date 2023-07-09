@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 
-export type WS = WebSocket & { isAlive: boolean };
+export type WS = WebSocket & { isAlive: boolean; user: IUser };
 
 export enum MessageType {
   reg = "reg",
@@ -30,20 +30,25 @@ export interface IResponseMessage<T> {
 export interface IUser {
   name: string;
   password: string;
-  index?: number;
+  userId: number;
 }
 export interface IRoom {
-  index: number;
-  users: IUser[];
+  roomId: number;
+  roomUsers: { name: string; userId: number }[];
 }
 export interface IGame {
-  index: number;
-  users: IGame[];
+  gameId: number;
+  gameUserIds: number[];
 }
 
-export interface IRegResponseData {
+export interface IWin {
+  name: string;
+  wins: number;
+}
+
+export interface IRegisterUserResponse {
   name: string;
   index: number;
   error: boolean;
-  errorText: string | undefined;
+  errorText: string;
 }
