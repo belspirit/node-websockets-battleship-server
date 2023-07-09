@@ -1,9 +1,12 @@
 import { WebSocketServer } from "ws";
+import { inspect } from "util";
 
 import {
+  IBoard,
   IGame,
   IRegisterUserResponse,
   IRoom,
+  IShipPosition,
   IUser,
   IWin,
   MessageType,
@@ -13,9 +16,9 @@ import { parseMessage, sendMessage } from "./utils/ws-helpers";
 
 const users: IUser[] = [];
 let userId: number = 0;
-const rooms: IRoom[] = [];
+let rooms: IRoom[] = [];
 let roomId: number = 0;
-const games: IGame[] = [];
+let games: IGame[] = [];
 let gameId: number = 0;
 const winners: IWin[] = [];
 
@@ -28,7 +31,7 @@ wss.on("connection", (ws: WS) => {
 
   ws.on("message", (data) => {
     const message = parseMessage(data);
-    console.log(message);
+    console.log(JSON.stringify(message));
 
     try {
       if (message.type === MessageType.reg) {
@@ -37,7 +40,7 @@ wss.on("connection", (ws: WS) => {
         if (!response.error) {
           ws.user = user as IUser;
         }
-        sendMessage(ws, MessageType.reg, user);
+        sendMessage(ws, MessageType.reg, response);
         sendMessage(ws, MessageType.update_room, rooms);
         sendMessage(ws, MessageType.update_winners, winners);
       }
@@ -67,9 +70,59 @@ wss.on("connection", (ws: WS) => {
           });
         });
       }
+
+      if (message.type === MessageType.add_ships) {
+        const { gameId, ships } = message.data as {
+          gameId: number;
+          indexPlayer: number;
+          ships: IShipPosition[];
+        };
+        const game = addShips(gameId, ws.user.userId!, ships);
+
+        if (game.boards.length !== 2) {
+          // wait for the second player ships
+          return;
+        }
+        wss.clients.forEach((client) => {
+          const player = client as WS;
+          const playerId = player.user.userId;
+          const playerBoard: IBoard | undefined = game.boards.find(
+            ({ userId }) => userId === playerId
+          );
+          if (!playerBoard) {
+            return;
+          }
+          sendMessage(player, MessageType.start_game, {
+            ships: playerBoard.ships,
+            currentPlayerIndex: playerId,
+          });
+
+          if (playerId !== game.gameUserIds[0]) {
+            return;
+          }
+          sendMessage(player, MessageType.turn, {
+            currentPlayer: game.gameUserIds[0],
+          });
+        });
+      }
     } catch (error) {
-      console.error(error);
+      let errorMessage;
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else {
+        errorMessage = error;
+      }
+      console.error(errorMessage);
     }
+  });
+
+  ws.on("close", (code, reason) => {
+    const userId = ws.user?.userId;
+    if (userId === undefined) {
+      return;
+    }
+
+    clearSession(userId);
   });
 });
 
@@ -78,9 +131,11 @@ wss.on("close", function close() {
 });
 
 const interval = setInterval(function ping() {
-  wss.clients.forEach(function each(ws: any) {
+  wss.clients.forEach(function each(client) {
+    const ws: WS = client as WS;
     if (ws.isAlive === false) {
       return ws.terminate();
+      console.log("Terminate WS");
     }
 
     ws.isAlive = false;
@@ -90,6 +145,11 @@ const interval = setInterval(function ping() {
 
 const heartbeat = (ws: WS) => {
   ws.isAlive = true;
+};
+
+const clearSession = (userId: number) => {
+  rooms = rooms.filter((r) => !r.roomUsers.some((u) => u.userId === userId));
+  games = games.filter((g) => !g.gameUserIds.some((id) => id === userId));
 };
 
 const registerUser = (user: IUser) => {
@@ -115,7 +175,7 @@ const registerUser = (user: IUser) => {
     return { response, user: newUser };
   }
 
-  return { response };
+  return { response, user: existingUser };
 };
 
 const createRoom = (userName: string, userId: number) => {
@@ -153,10 +213,10 @@ const addUserToRoom = (roomId: number, indexUser: number) => {
     room.roomUsers.push({ name: user.name, userId: user.userId });
   }
   const [user1, user2] = room.roomUsers;
-  return createGame(user1.userId!, user2.userId!);
+  return createGame(user1.userId, user2.userId);
 };
 
-const createGame = (userId1: number, userId2: number) => {
+const createGame = (userId1: number, userId2: number): IGame => {
   const existingGame = games.find(
     (g) =>
       g.gameUserIds.length === 2 &&
@@ -166,7 +226,39 @@ const createGame = (userId1: number, userId2: number) => {
     throw new Error("The game with these two users already exists");
   }
 
-  const game = { gameId: gameId++, gameUserIds: [userId1, userId2] };
+  const game: IGame = {
+    gameId: gameId,
+    gameUserIds: [userId1, userId2],
+    boards: [],
+  };
+  gameId++;
   games.push(game);
+  return game;
+};
+
+const addShips = (
+  gameId: number,
+  userId: number,
+  ships: IShipPosition[]
+): IGame => {
+  const game = games.find(
+    (g) =>
+      g.gameUserIds.length === 2 && g.gameUserIds.some((id) => id === userId)
+  );
+  if (!game) {
+    throw new Error(`The game ${gameId} with user ${userId} doesn't exist`);
+  }
+  if (game.boards.length === 2) {
+    throw new Error("Both players have provided their ships already");
+  }
+
+  const board: IBoard = {
+    gameId,
+    userId,
+    ships: ships.map((pos) => ({ ...pos })),
+    attacks: [],
+  };
+  game.boards.push(board);
+
   return game;
 };

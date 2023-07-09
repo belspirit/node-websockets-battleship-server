@@ -13,6 +13,7 @@ export enum MessageType {
   finish = "finish",
   update_room = "update_room",
   update_winners = "update_winners",
+  add_ships = "add_ships",
 }
 
 export interface IRequestMessage {
@@ -27,6 +28,27 @@ export interface IResponseMessage<T> {
   id: number;
 }
 
+export interface IShipPosition {
+  position: { x: number; y: number };
+  direction: boolean;
+  type: "huge" | "large" | "medium" | "small";
+  length: 1 | 2 | 3 | 4;
+  killed: boolean;
+}
+
+export interface IAttack {
+  x: number;
+  y: number;
+  state: "shot" | "miss";
+}
+
+export interface IBoard {
+  gameId: number;
+  userId: number;
+  ships: IShipPosition[];
+  attacks: IAttack[];
+}
+
 export interface IUser {
   name: string;
   password: string;
@@ -39,6 +61,7 @@ export interface IRoom {
 export interface IGame {
   gameId: number;
   gameUserIds: number[];
+  boards: IBoard[];
 }
 
 export interface IWin {
