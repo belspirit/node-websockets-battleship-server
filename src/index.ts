@@ -1,5 +1,4 @@
 import { WebSocketServer } from "ws";
-import { inspect } from "util";
 
 import {
   IAttackResponse,
@@ -9,19 +8,11 @@ import {
   IRoom,
   IShip,
   IUser,
-  IWin,
   MessageType,
   WS,
 } from "./types";
 import { parseMessage, sendMessage } from "./utils/ws-helpers";
-
-const users: IUser[] = [];
-let userId: number = 0;
-let rooms: IRoom[] = [];
-let roomId: number = 0;
-let games: IGame[] = [];
-let gameId: number = 0;
-const winners: IWin[] = [];
+import state from "./state";
 
 const wss = new WebSocketServer({ port: 3000 });
 
@@ -42,14 +33,14 @@ wss.on("connection", (ws: WS) => {
           ws.user = user as IUser;
         }
         sendMessage(ws, MessageType.reg, response);
-        sendMessage(ws, MessageType.update_room, rooms);
-        sendMessage(ws, MessageType.update_winners, winners);
+        sendMessage(ws, MessageType.update_room, state.rooms);
+        sendMessage(ws, MessageType.update_winners, state.winners);
       }
 
       if (message.type === MessageType.create_room) {
         createRoom(ws.user.name, ws.user.userId!);
         wss.clients.forEach((client) => {
-          sendMessage(client as WS, MessageType.update_room, rooms);
+          sendMessage(client as WS, MessageType.update_room, state.rooms);
         });
       }
 
@@ -69,7 +60,7 @@ wss.on("connection", (ws: WS) => {
             idGame: gameId,
             idPlayer: gameUserIds.find((id) => id !== ws.user.userId!),
           });
-          sendMessage(player, MessageType.update_room, rooms);
+          sendMessage(player, MessageType.update_room, state.rooms);
         });
       }
 
@@ -118,7 +109,11 @@ wss.on("connection", (ws: WS) => {
           y: number;
           indexPlayer: number;
         };
-        console.log({ attacker: currentPlayerName, indexPlayer, users });
+        console.log({
+          attacker: currentPlayerName,
+          indexPlayer,
+          users: state.users,
+        });
 
         const { game, finish, enemyId, attacks } = playersAttack(
           gameId,
@@ -191,6 +186,7 @@ wss.on("connection", (ws: WS) => {
             sendMessage(ws, MessageType.finish, {
               winPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
             });
+            sendMessage(ws, MessageType.update_winners, state.winners);
             return;
           }
 
@@ -248,12 +244,16 @@ const heartbeat = (ws: WS) => {
 };
 
 const clearSession = (userId: number) => {
-  rooms = rooms.filter((r) => !r.roomUsers.some((u) => u.userId === userId));
-  games = games.filter((g) => !g.gameUserIds.some((id) => id === userId));
+  state.rooms = state.rooms.filter(
+    (r) => !r.roomUsers.some((u) => u.userId === userId)
+  );
+  state.games = state.games.filter(
+    (g) => !g.gameUserIds.some((id) => id === userId)
+  );
 };
 
 const registerUser = (user: IUser) => {
-  const existingUser = users.find((u) => u.name === user.name);
+  const existingUser = state.users.find((u) => u.name === user.name);
   const response: IRegisterUserResponse = {
     name: user.name,
     index: -1,
@@ -269,8 +269,8 @@ const registerUser = (user: IUser) => {
       response.errorText = "Wrong password";
     }
   } else {
-    const newUser = { ...user, userId: userId++ };
-    users.push(newUser);
+    const newUser = { ...user, userId: state.userId++ };
+    state.users.push(newUser);
     response.index = newUser.userId;
     return { response, user: newUser };
   }
@@ -279,7 +279,7 @@ const registerUser = (user: IUser) => {
 };
 
 const createRoom = (userName: string, userId: number): IRoom => {
-  const existingRoom = rooms.find(
+  const existingRoom = state.rooms.find(
     (r) =>
       r.roomUsers.length === 1 && r.roomUsers.some((u) => u.userId === userId)
   );
@@ -291,15 +291,15 @@ const createRoom = (userName: string, userId: number): IRoom => {
   }
 
   const room = {
-    roomId: roomId++,
+    roomId: state.roomId++,
     roomUsers: [{ name: userName, userId }],
   };
-  rooms.push(room);
+  state.rooms.push(room);
   return room;
 };
 
 const addUserToRoom = (roomId: number, indexUser: number) => {
-  const room = rooms.find((r) => r.roomId === roomId);
+  const room = state.rooms.find((r) => r.roomId === roomId);
   if (
     !room ||
     room.roomUsers.length != 1 ||
@@ -309,19 +309,19 @@ const addUserToRoom = (roomId: number, indexUser: number) => {
       `Error while trying to add user ${indexUser} to the room ${roomId}`
     );
   }
-  const user = users.find((u) => u.userId === indexUser);
+  const user = state.users.find((u) => u.userId === indexUser);
   if (!user) {
     throw new Error(`User ${indexUser} is not found`);
   }
   const [user1] = room.roomUsers;
   const user2 = user;
-  rooms = rooms.filter((r) => r.roomId !== room.roomId);
-  console.log({ rooms });
+  state.rooms = state.rooms.filter((r) => r.roomId !== room.roomId);
+
   return createGame(user1.userId, user2.userId);
 };
 
 const createGame = (userId1: number, userId2: number): IGame => {
-  const existingGame = games.find(
+  const existingGame = state.games.find(
     (g) =>
       g.gameUserIds.length === 2 &&
       g.gameUserIds.every((id) => id === userId1 || id === userId2)
@@ -331,18 +331,18 @@ const createGame = (userId1: number, userId2: number): IGame => {
   }
 
   const game: IGame = {
-    gameId: gameId,
+    gameId: state.gameId,
     gameUserIds: [userId1, userId2],
     turnId: userId1,
     boards: [],
   };
-  gameId++;
-  games.push(game);
+  state.gameId++;
+  state.games.push(game);
   return game;
 };
 
 const addShips = (gameId: number, userId: number, ships: IShip[]): IGame => {
-  const game = games.find(
+  const game = state.games.find(
     (g) =>
       g.gameUserIds.length === 2 && g.gameUserIds.some((id) => id === userId)
   );
@@ -380,7 +380,7 @@ const playersAttack = (
   enemyId: number;
   attacks: IAttackResponse[];
 } => {
-  const game = games.find((g) => g.gameId === gameId);
+  const game = state.games.find((g) => g.gameId === gameId);
   if (!game) {
     throw new Error(`The game ${gameId} doesn't exist`);
   }
@@ -448,8 +448,7 @@ const playersAttack = (
     }
     finish = enemyBoard.ships.every((ship) => ship.killed);
     if (finish) {
-      games = games.filter((g) => g.gameId !== gameId);
-      console.log({ games });
+      state.games = state.games.filter((g) => g.gameId !== gameId);
     }
   } else {
     const attack: IAttackResponse = {
@@ -468,7 +467,7 @@ const playersAttack = (
 };
 
 const win = (name: string) => {
-  let winner = winners.find((w) => (w.name = name));
+  let winner = state.winners.find((w) => (w.name = name));
   if (!winner) {
     winner = { name, wins: 0 };
   }
