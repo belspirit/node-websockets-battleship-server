@@ -65,10 +65,11 @@ wss.on("connection", (ws: WS) => {
           if (!gameUserIds.some((id) => id === player.user.userId)) {
             return;
           }
-          sendMessage(client as WS, MessageType.create_game, {
+          sendMessage(player, MessageType.create_game, {
             idGame: gameId,
             idPlayer: gameUserIds.find((id) => id !== ws.user.userId!),
           });
+          sendMessage(player, MessageType.update_room, rooms);
         });
       }
 
@@ -87,7 +88,7 @@ wss.on("connection", (ws: WS) => {
         wss.clients.forEach((client) => {
           const player = client as WS;
           const playerId = player.user.userId;
-          const playerBoard: IBoard | undefined = game.boards.find(
+          const playerBoard = game.boards.find(
             ({ userId }) => userId === playerId
           );
           if (!playerBoard) {
@@ -95,7 +96,7 @@ wss.on("connection", (ws: WS) => {
           }
           sendMessage(player, MessageType.start_game, {
             ships: playerBoard.ships,
-            currentPlayerIndex: playerId,
+            currentPlayerIndex: ws.user.userId === playerId ? 0 : 1,
           });
 
           game.turnId = game.gameUserIds[0];
@@ -117,6 +118,8 @@ wss.on("connection", (ws: WS) => {
           y: number;
           indexPlayer: number;
         };
+        console.log({ attacker: currentPlayerName, indexPlayer, users });
+
         const { game, finish, enemyId, attacks } = playersAttack(
           gameId,
           currentPlayerId,
@@ -127,13 +130,13 @@ wss.on("connection", (ws: WS) => {
         wss.clients.forEach((client) => {
           const ws = client as WS;
           if (
-            ws.user.userId !== enemyId &&
-            ws.user.userId !== currentPlayerId
+            ws.user.userId !== currentPlayerId &&
+            ws.user.userId !== enemyId
           ) {
             return;
           }
           attacks.forEach((a) => {
-            const attack: IAttackResponse = {
+            const attack: IAttackResponse & { currentPlayer: 0 | 1 } = {
               ...a,
               currentPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
             };
@@ -147,6 +150,49 @@ wss.on("connection", (ws: WS) => {
             return;
           }
           console.log({ turnId: game.turnId });
+
+          sendMessage(ws, MessageType.turn, {
+            currentPlayer: ws.user.userId === game.turnId ? 0 : 1,
+          });
+        });
+      }
+
+      if (message.type === MessageType.randomAttack) {
+        const currentPlayerId = ws.user.userId;
+        const currentPlayerName = ws.user.name;
+        const { gameId, indexPlayer } = message.data as {
+          gameId: number;
+          indexPlayer: number;
+        };
+        const { game, finish, enemyId, attacks } = playersAttack(
+          gameId,
+          currentPlayerId,
+          Math.round(Math.random() * 10),
+          Math.round(Math.random() * 10)
+        );
+
+        wss.clients.forEach((client) => {
+          const ws = client as WS;
+          if (
+            ws.user.userId !== currentPlayerId &&
+            ws.user.userId !== enemyId
+          ) {
+            return;
+          }
+          attacks.forEach((a) => {
+            const attack: IAttackResponse & { currentPlayer: 0 | 1 } = {
+              ...a,
+              currentPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
+            };
+            sendMessage(ws, MessageType.attack, attack);
+          });
+          if (finish) {
+            win(currentPlayerName);
+            sendMessage(ws, MessageType.finish, {
+              winPlayer: ws.user.userId === currentPlayerId ? 0 : 1,
+            });
+            return;
+          }
 
           sendMessage(ws, MessageType.turn, {
             currentPlayer: ws.user.userId === game.turnId ? 0 : 1,
@@ -267,9 +313,10 @@ const addUserToRoom = (roomId: number, indexUser: number) => {
   if (!user) {
     throw new Error(`User ${indexUser} is not found`);
   }
-  rooms = rooms.filter((r) => r.roomId !== room.roomId);
   const [user1] = room.roomUsers;
   const user2 = user;
+  rooms = rooms.filter((r) => r.roomId !== room.roomId);
+  console.log({ rooms });
   return createGame(user1.userId, user2.userId);
 };
 
@@ -346,18 +393,15 @@ const playersAttack = (
       `The user ${userId} should't attack when turn user ${game.turnId}`
     );
   }
-  const existingAttack = board.attacks.find(
-    (a) => a.position.x === x && a.position.y === y
-  );
-  if (existingAttack) {
-    throw new Error(`The user ${userId} already attacked by x:${x} y:${y}`);
-  }
   const enemyBoard = game.boards.find((b) => b.userId !== userId);
   if (!enemyBoard) {
     throw new Error(`The enemy's board doesn't exist in the game ${gameId}`);
   }
   const result: IAttackResponse[] = [];
 
+  const existingAttack = board.attacks.find(
+    (a) => a.position.x === x && a.position.y === y
+  );
   const ship = enemyBoard.ships.find((s) => {
     const x1 = s.position.x;
     const x2 = x1 + (!s.direction ? s.length - 1 : 0);
@@ -368,7 +412,7 @@ const playersAttack = (
   const enemyId = enemyBoard.userId;
   let turn = false;
   let finish = false;
-  if (ship) {
+  if (!existingAttack && ship) {
     turn = true;
     ship.health--;
     if (!ship.health) {
@@ -377,7 +421,6 @@ const playersAttack = (
         const x = ship.direction ? ship.position.x : ship.position.x + i;
         const y = !ship.direction ? ship.position.y : ship.position.y + i;
         const attack: IAttackResponse = {
-          currentPlayer: enemyId,
           status: "killed",
           position: { x, y },
         };
@@ -390,7 +433,6 @@ const playersAttack = (
           if (x < 0 || x > 9 || y < 0 || y > 9) continue;
 
           const attack: IAttackResponse = {
-            currentPlayer: enemyId,
             status: "miss",
             position: { x, y },
           };
@@ -399,7 +441,6 @@ const playersAttack = (
       }
     } else {
       const attack: IAttackResponse = {
-        currentPlayer: enemyId,
         status: "shot",
         position: { x, y },
       };
@@ -408,10 +449,10 @@ const playersAttack = (
     finish = enemyBoard.ships.every((ship) => ship.killed);
     if (finish) {
       games = games.filter((g) => g.gameId !== gameId);
+      console.log({ games });
     }
   } else {
     const attack: IAttackResponse = {
-      currentPlayer: enemyId,
       status: "miss",
       position: { x, y },
     };

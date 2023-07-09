@@ -10,6 +10,7 @@ export enum MessageType {
   start_game = "start_game",
   turn = "turn",
   attack = "attack",
+  randomAttack = "randomAttack",
   finish = "finish",
   update_room = "update_room",
   update_winners = "update_winners",
@@ -47,7 +48,6 @@ export interface IAttackResponse {
     x: number;
     y: number;
   };
-  currentPlayer: number;
   status: "miss" | "killed" | "shot";
 }
 
